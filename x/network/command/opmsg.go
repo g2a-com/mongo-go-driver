@@ -8,42 +8,40 @@ package command
 
 import (
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/x/bsonx"
+	"go.mongodb.org/mongo-driver/bson/bsontype"
+	"go.mongodb.org/mongo-driver/x/bsonx/bsoncore"
 	"go.mongodb.org/mongo-driver/x/network/wiremessage"
 )
 
 func decodeCommandOpMsg(msg wiremessage.Msg) (bson.Raw, error) {
-	var mainDoc bsonx.Doc
+	var mainDoc bsoncore.Document
+	idx, mainDoc := bsoncore.ReserveLength(mainDoc)
 
 	for _, section := range msg.Sections {
 		switch converted := section.(type) {
 		case wiremessage.SectionBody:
-			err := mainDoc.UnmarshalBSON(converted.Document)
+			doc := bsoncore.Document(converted.Document)
+			elems, err := doc.Elements()
 			if err != nil {
 				return nil, err
 			}
-		case wiremessage.SectionDocumentSequence:
-			arr := bsonx.Arr{}
-			for _, doc := range converted.Documents {
-				newDoc := bsonx.Doc{}
-				err := newDoc.UnmarshalBSON(doc)
-				if err != nil {
-					return nil, err
-				}
-
-				arr = append(arr, bsonx.Document(newDoc))
+			for _, elem := range elems {
+				mainDoc = bsoncore.AppendValueElement(mainDoc, elem.Key(), elem.Value())
 			}
-
-			mainDoc = append(mainDoc, bsonx.Elem{converted.Identifier, bsonx.Array(arr)})
+		case wiremessage.SectionDocumentSequence:
+			docs := make([]bsoncore.Value, len(converted.Documents))
+			for i, doc := range converted.Documents {
+				docs[i] = bsoncore.Value{Type: bsontype.Type(doc[0]), Data: doc[2:]}
+			}
+			mainDoc = bsoncore.BuildArrayElement(mainDoc, converted.Identifier, docs...)
 		}
 	}
-
-	byteArray, err := mainDoc.MarshalBSON()
+	mainDoc, err := bsoncore.AppendDocumentEnd(mainDoc, idx)
 	if err != nil {
 		return nil, err
 	}
 
-	rdr := bson.Raw(byteArray)
+	rdr := bson.Raw(mainDoc)
 	err = rdr.Validate()
 	if err != nil {
 		return nil, NewCommandResponseError("malformed OP_MSG: invalid document", err)
