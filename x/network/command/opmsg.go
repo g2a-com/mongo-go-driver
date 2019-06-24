@@ -7,6 +7,8 @@
 package command
 
 import (
+	"strconv"
+
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/bsontype"
 	"go.mongodb.org/mongo-driver/x/bsonx/bsoncore"
@@ -26,14 +28,19 @@ func decodeCommandOpMsg(msg wiremessage.Msg) (bson.Raw, error) {
 				return nil, err
 			}
 			for _, elem := range elems {
-				mainDoc = bsoncore.AppendValueElement(mainDoc, elem.Key(), elem.Value())
+				mainDoc = bsoncore.AppendHeader(mainDoc, elem.Value().Type, elem.Key())
+				mainDoc = append(mainDoc, elem.Value().Data...)
 			}
 		case wiremessage.SectionDocumentSequence:
-			docs := make([]bsoncore.Value, len(converted.Documents))
+			mainDoc = bsoncore.AppendHeader(mainDoc, bsontype.Array, converted.Identifier)
+			idx, mainDoc := bsoncore.ReserveLength(mainDoc)
 			for i, doc := range converted.Documents {
-				docs[i] = bsoncore.Value{Type: bsontype.Type(doc[0]), Data: doc[2:]}
+				val := bsoncore.Value{Type: bsontype.Type(doc[0]), Data: doc[2:]}
+				mainDoc = bsoncore.AppendHeader(mainDoc, val.Type, strconv.Itoa(i))
+				mainDoc = append(mainDoc, val.Data...)
 			}
-			mainDoc = bsoncore.BuildArrayElement(mainDoc, converted.Identifier, docs...)
+			mainDoc = append(mainDoc, 0x00)
+			mainDoc = bsoncore.UpdateLength(mainDoc, idx, int32(len(mainDoc[idx:])))
 		}
 	}
 	mainDoc, err := bsoncore.AppendDocumentEnd(mainDoc, idx)
